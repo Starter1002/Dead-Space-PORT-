@@ -1,14 +1,13 @@
 package com.deadspace.port;
 
-import android.content.res.AssetManager;
-
 /** Puente JNI hacia libdsport.so (C++: lector M3G, renderizador GLES 3). */
 public final class NativeLib {
     static { System.loadLibrary("dsport"); }
 
     private NativeLib() {}
 
-    public static native void nativeInit(AssetManager assets);
+    /** root = carpeta "published" del juego en el movil. */
+    public static native void nativeInit(String root);
     public static native boolean nativeSurfaceCreated();
     public static native void nativeResize(int w, int h);
     public static native void nativeDraw();

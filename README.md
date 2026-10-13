@@ -1,41 +1,52 @@
-# Dead Space iOS → Android (arm64) · Paso 5: visor nativo
+# Dead Space iOS → Android (arm64) · visor nativo (paso 5)
 
-Visor que carga los `.m3g` **originales del IPA** (sin convertir) y los dibuja con OpenGL ES 3.0.
-Es la base del port: el lector de formatos (C++) y el renderizador son los que usará el motor final.
+Visor que carga los `.m3g` **originales del IPA** (sin convertir) con OpenGL ES 3.0.
+Los archivos del juego NO van dentro del APK ni del repositorio: se leen de `/sdcard/DeadSpace/published/`.
 
-## Compilar
-1. Extrae el IPA con `ds_step1_extract.py` (paso 1) → carpeta `salida/app/published`.
-2. Copia los assets al proyecto:
-   `tools/copy_assets.sh /ruta/a/salida/app/published`
-   (copia `models`, `textures`, `textures_uncompressed`, `ParticleBaseTextures`; ~72 MB).
-3. Abre la carpeta en **Android Studio** (SDK 33 + NDK + CMake) y pulsa *Run*, o por línea de comandos
-   con Gradle 7.4.2:  `gradle wrapper --gradle-version 7.4.2 && ./gradlew assembleDebug`
-   → `app/build/outputs/apk/debug/app-debug.apk` (solo `arm64-v8a`).
+## 1. Compilar el APK en GitHub (gratis, en la nube)
+1. Crea un repositorio vacío en GitHub (sin README).
+2. Sube el contenido de esta carpeta (`dsport/`) a la raíz del repositorio, incluida `.github/`.
+   Desde Termux: ver comandos abajo.
+3. Pestaña **Actions → Build APK**. Se lanza solo al subir; también con *Run workflow*.
+4. Al terminar (5-10 min), abre la ejecución y descarga el artefacto **DeadSpacePort-debug** (un ZIP con `app-debug.apk`).
 
-> Versiones: AGP 7.3.1 + Gradle 7.4.2 + compileSdk 33 (las que traen AndroidIDE / Android Code Studio).
-> En Android Studio moderno puedes subirlas (AGP 8.x, Gradle 8.7, SDK 34).
+### Subir desde Termux
+```
+pkg install git
+git config --global --add safe.directory '*'
+cd /ruta/a/dsport
+git init -b main && git config core.fileMode false
+git add . && git commit -m "Dead Space Port"
+git remote add origin https://github.com/TU_USUARIO/TU_REPO.git
+git push -u origin main
+```
+Usuario = tu usuario de GitHub; contraseña = un **token personal** (Settings → Developer settings → Tokens).
+Token clásico con permisos `repo` y `workflow` (hace falta `workflow` para subir `.github/workflows`).
 
-## Uso
-Un dedo: orbitar · Pellizco: zoom · `<` `>`: modelo anterior/siguiente (arranca en Isaac).
-Arriba se muestra el resumen (mallas, vértices, triángulos, texturas) o el error.
+## 2. Copiar los assets al móvil
+Con la carpeta `salida/app/published` del paso 1 en Download (Termux):
+```
+sh tools/install_assets.sh
+```
+Copia `models`, `textures`, `textures_uncompressed` y `ParticleBaseTextures` (~72 MB) a
+`/sdcard/DeadSpace/published/`. Si la carpeta del paso 1 está en otro sitio: `sh tools/install_assets.sh /ruta/published`.
 
-## Qué hace
-- `m3g.cpp`  lector IM-M3G / JSR-184: grafo de escena, matrices de nodo, VertexBuffer/Array (byte, short, float),
-  strips → triángulos, SubMesh (tipo 100), SkinnedMesh en pose base, texturas externas (parámetro 900).
-- `pvrtc.cpp` decodificador PVRTC 4bpp (formatos de imagen 124/125) + RGB/RGBA crudos (99/100).
-- `renderer.cpp` GLES 3: un shader, texturas con mipmaps, normales calculadas si faltan, pasada opaca + pasada con alfa.
-- `jni.cpp` / `MainActivity.java` puente y UI mínima.
+## 3. Usar
+Instala el APK, ábrelo y pulsa **Conceder acceso a archivos** (Android 11+: "Permitir acceso a todos los archivos").
+Un dedo: orbitar · pellizco: zoom · `<` `>`: modelo anterior/siguiente (empieza en Isaac).
+Arriba sale el resumen del modelo (mallas, vértices, triángulos, texturas) o el error.
 
-## Verificado en PC (tools/host_test.cpp, g++ -std=c++17)
-- 49 modelos de `models/`: **4180 mallas, 577 036 vértices, 421 176 triángulos** = idéntico al exportador de Python.
-- 168 texturas (PVRTC 124/125, RGB, RGBA): **idénticas píxel a píxel** al decodificador de Python.
-- `jni.cpp`, `renderer.cpp` y el resto: compilan sin avisos (`-Wall -Wextra`) contra cabeceras de sustitución.
+## Estructura
+- `m3g.cpp`  lector IM-M3G / JSR-184 (grafo de escena, strips, SubMesh tipo 100, SkinnedMesh en pose base, texturas externas).
+- `pvrtc.cpp` PVRTC 4bpp (imágenes 124/125) + RGB/RGBA crudos (99/100).
+- `renderer.cpp` GLES 3, `jni.cpp` / `MainActivity.java` puente y UI.
+- `tools/host_test.cpp` prueba en PC del núcleo (g++ -std=c++17).
 
-## NO verificado todavía
-- No se ha compilado con el NDK real ni ejecutado en un dispositivo/GPU: el renderizador y la actividad son código
-  sin probar en hardware.
-- Animación, skinning en ejecución, modos de mezcla del material (se usa alfa si la textura tiene alfa),
-  niebla, luces del juego, sonido, entrada de juego: pendientes.
-- Los `*_dynamic_text` (carteles con texto) no existen en disco y se dibujan sin textura.
+## Verificado
+En PC: 49 modelos = 4180 mallas, 577 036 vértices, 421 176 triángulos (idéntico al exportador de Python);
+168 texturas idénticas píxel a píxel; fuentes C++ sin avisos con `-Wall -Wextra` contra cabeceras de sustitución.
 
-Los assets del juego son propiedad de sus dueños: no los subas a ningún repositorio (`.gitignore` ya los excluye).
+## NO verificado
+No se ha ejecutado el workflow de GitHub, ni compilado con el NDK real, ni probado en dispositivo/GPU.
+Pendiente: animación, skinning en ejecución, modos de mezcla, niebla, sonido, entrada de juego.
+Los assets del juego son propiedad de sus dueños: no los subas a ningún repositorio.

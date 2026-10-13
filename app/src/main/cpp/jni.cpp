@@ -1,31 +1,26 @@
 #include "renderer.h"
-#include <android/asset_manager.h>
-#include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <jni.h>
+#include <cstdio>
 #include <string>
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "DSPort", __VA_ARGS__)
 
 namespace {
-AAssetManager* gAssets = nullptr;
 ds::Renderer gRenderer;
-std::string kRoot = "published/";    // los .m3g originales van en app/src/main/assets/published/
+std::string gRoot;    // carpeta "published" del juego en el movil, p. ej. /storage/emulated/0/DeadSpace/published
 
-bool readAsset(const std::string& rel, std::vector<uint8_t>& out) {
-    if (!gAssets) return false;
-    AAsset* a = AAssetManager_open(gAssets, (kRoot + rel).c_str(), AASSET_MODE_STREAMING);
-    if (!a) return false;
-    off_t len = AAsset_getLength(a);
-    out.resize((size_t)len);
-    size_t got = 0;
-    while (got < out.size()) {
-        int r = AAsset_read(a, out.data() + got, out.size() - got);
-        if (r <= 0) break;
-        got += (size_t)r;
-    }
-    AAsset_close(a);
-    return got == out.size();
+bool readFile(const std::string& rel, std::vector<uint8_t>& out) {
+    FILE* f = fopen((gRoot + "/" + rel).c_str(), "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n < 0) { fclose(f); return false; }
+    out.resize((size_t)n);
+    size_t got = n ? fread(out.data(), 1, (size_t)n, f) : 0;
+    fclose(f);
+    return got == (size_t)n;
 }
 
 jstring toJ(JNIEnv* env, const std::string& s) { return env->NewStringUTF(s.c_str()); }
@@ -33,8 +28,11 @@ jstring toJ(JNIEnv* env, const std::string& s) { return env->NewStringUTF(s.c_st
 
 extern "C" {
 
-JNIEXPORT void JNICALL Java_com_deadspace_port_NativeLib_nativeInit(JNIEnv* env, jclass, jobject assetManager) {
-    gAssets = AAssetManager_fromJava(env, assetManager);
+JNIEXPORT void JNICALL Java_com_deadspace_port_NativeLib_nativeInit(JNIEnv* env, jclass, jstring root) {
+    const char* c = env->GetStringUTFChars(root, nullptr);
+    gRoot = c;
+    env->ReleaseStringUTFChars(root, c);
+    LOG("raiz de assets: %s", gRoot.c_str());
 }
 
 JNIEXPORT jboolean JNICALL Java_com_deadspace_port_NativeLib_nativeSurfaceCreated(JNIEnv*, jclass) {
@@ -59,7 +57,7 @@ JNIEXPORT jstring JNICALL Java_com_deadspace_port_NativeLib_nativeLoad(JNIEnv* e
     std::string path = c;
     env->ReleaseStringUTFChars(jpath, c);
     ds::Model model; std::string err;
-    if (!ds::loadModel(readAsset, path, model, err)) {
+    if (!ds::loadModel(readFile, path, model, err)) {
         gRenderer.clearModel();
         LOG("error cargando %s: %s", path.c_str(), err.c_str());
         return toJ(env, "ERROR: " + err);
