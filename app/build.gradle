@@ -1,0 +1,35 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.deadspace.port'
+    compileSdk 33
+
+    defaultConfig {
+        applicationId 'com.deadspace.port'
+        minSdk 24
+        targetSdk 33
+        versionCode 1
+        versionName '0.1'
+        ndk { abiFilters 'arm64-v8a' }          // solo 64 bits
+        externalNativeBuild { cmake { cppFlags '-std=c++17' } }
+    }
+
+    externalNativeBuild {
+        cmake { path 'src/main/cpp/CMakeLists.txt' }
+    }
+
+    aaptOptions { noCompress 'm3g' }            // los .m3g se leen tal cual desde el APK
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug  // firma de depuracion: instalable directamente
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

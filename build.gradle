@@ -1,0 +1,4 @@
+plugins {
+    // AGP 7.3.1 exige Gradle >= 7.4 (compatible con Gradle 7.4.2 de AndroidIDE / Code Studio)
+    id 'com.android.application' version '8.2.2' apply false
+}

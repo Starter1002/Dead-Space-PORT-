@@ -1,0 +1,6 @@
+# los assets del juego son propietarios: no se versionan
+app/src/main/assets/published/
+build/
+.gradle/
+local.properties
+tools/host_test

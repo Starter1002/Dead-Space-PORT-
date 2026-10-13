@@ -1,0 +1,20 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/Download/DeadSpacePort-1/dsport/build.gradle",
+      "selection": {
+        "end": {
+          "column": 60,
+          "index": 165,
+          "line": 2
+        },
+        "start": {
+          "column": 60,
+          "index": 165,
+          "line": 2
+        }
+      }
+    }
+  ],
+  "selectedFile": "/storage/emulated/0/Download/DeadSpacePort-1/dsport/build.gradle"
+}
