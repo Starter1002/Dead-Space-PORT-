@@ -67,4 +67,16 @@ JNIEXPORT jstring JNICALL Java_com_deadspace_port_NativeLib_nativeLoad(JNIEnv* e
     return toJ(env, model.log);
 }
 
+JNIEXPORT jstring JNICALL Java_com_deadspace_port_NativeLib_nativeAnimInfo(JNIEnv* env, jclass) {
+    return toJ(env, gRenderer.animInfo());
+}
+
+JNIEXPORT jstring JNICALL Java_com_deadspace_port_NativeLib_nativeNextClip(JNIEnv* env, jclass, jint delta) {
+    return toJ(env, gRenderer.nextClip(delta));
+}
+
+JNIEXPORT jstring JNICALL Java_com_deadspace_port_NativeLib_nativeTogglePlay(JNIEnv* env, jclass) {
+    return toJ(env, gRenderer.togglePlay());
+}
+
 }  // extern "C"

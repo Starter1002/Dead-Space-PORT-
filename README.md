@@ -34,7 +34,15 @@ Copia `models`, `textures`, `textures_uncompressed` y `ParticleBaseTextures` (~7
 ## 3. Usar
 Instala el APK, ábrelo y pulsa **Conceder acceso a archivos** (Android 11+: "Permitir acceso a todos los archivos").
 Un dedo: orbitar · pellizco: zoom · `<` `>`: modelo anterior/siguiente (empieza en Isaac).
+Fila superior de botones: `clip -` / `clip +` cambian de animación y `play/pausa` la detiene.
+Los clips se reproducen en bucle; arriba sale el número de clip y su duración. Los personajes tienen entre 1 y 121 clips.
 Arriba sale el resumen del modelo (mallas, vértices, triángulos, texturas) o el error.
+
+## Animaciones (paso 6)
+Cada SkinnedMesh trae su lista de canales (propiedad, hueso): 275 traslación, 268 orientación, 270 escala.
+Los clips son bloques de N secuencias de fotogramas consecutivas con esa forma exacta (verificado en los 11 personajes:
+Isaac 121 clips, brute 27, slasher 56, lurker 46, boss 42...). Skinning en GPU (hasta 48 huesos).
+Los nombres de los clips parecen estar en los `.bin` hermanos (formato FORM/BINX), todavía sin descifrar.
 
 ## Estructura
 - `m3g.cpp`  lector IM-M3G / JSR-184 (grafo de escena, strips, SubMesh tipo 100, SkinnedMesh en pose base, texturas externas).
@@ -44,7 +52,8 @@ Arriba sale el resumen del modelo (mallas, vértices, triángulos, texturas) o e
 
 ## Verificado
 En PC: 49 modelos = 4180 mallas, 577 036 vértices, 421 176 triángulos (idéntico al exportador de Python);
-168 texturas idénticas píxel a píxel; fuentes C++ sin avisos con `-Wall -Wextra` contra cabeceras de sustitución.
+168 texturas idénticas píxel a píxel; 11 esqueletos y 356 clips cargan sin errores y las poses animadas
+(Isaac, brute, slasher, lurker) se ven coherentes en pruebas de PC; fuentes C++ sin avisos con `-Wall -Wextra` contra cabeceras de sustitución.
 
 ## NO verificado
 No se ha ejecutado el workflow de GitHub, ni compilado con el NDK real, ni probado en dispositivo/GPU.

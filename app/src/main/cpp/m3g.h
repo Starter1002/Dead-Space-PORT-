@@ -22,8 +22,36 @@ struct SubMesh {
     int image = -1;                 // indice en Model::images, -1 = sin textura
 };
 
+// Esqueleto + animaciones de un SkinnedMesh (ver paso 4/6: cada clip es un bloque de N secuencias
+// consecutivas cuyo orden sigue la lista de canales (propiedad, hueso) del SkinnedMesh).
+struct Skeleton {
+    struct Node {
+        int parent = -1;                                   // indice en nodes (los padres van antes)
+        float tr[3] = {0, 0, 0}, sc[3] = {1, 1, 1}, q[4] = {0, 0, 0, 1};   // pose de reposo (cuaternion x,y,z,w)
+        std::string name;
+    };
+    struct Channel { int node = -1; int prop = 0; };       // prop: 275 traslacion, 268 orientacion, 270 escala
+    struct Track { int interp = 176; int comps = 0; std::vector<uint32_t> t; std::vector<float> v; };  // t en ms
+    struct Clip { int duration = 0; std::vector<Track> tracks; };      // tracks paralelo a channels
+    std::vector<Node> nodes;
+    std::vector<int> palette;                              // palette[i] = nodo del hueso i (los indices de vertice apuntan aqui)
+    std::vector<Channel> channels;
+    std::vector<Clip> clips;
+    std::vector<float> invBind;                            // 16 floats por hueso (fila-mayor): inversa del mundo en reposo
+};
+
+// Matrices de hueso (columna-mayor, listas para OpenGL) del esqueleto en el clip y tiempo dados.
+// clip < 0 o fuera de rango = pose de reposo (matrices identidad).
+void evalPalette(const Skeleton& sk, int clip, double timeMs, std::vector<float>& out);
+
+struct Mesh;
+// Skinning por CPU de las posiciones (misma matematica que el shader); para pruebas.
+void skinPositions(const Mesh& m, const std::vector<float>& palette, std::vector<float>& out);
+
 struct Mesh {
     int id = 0;                      // indice de objeto dentro del .m3g
+    int skeleton = -1;               // indice en Model::skeletons (-1 = malla estatica)
+    std::vector<float> boneIdx, boneW;   // 4 por vertice (solo con esqueleto)
     bool skinned = false;            // SkinnedMesh (se dibuja en pose base)
     std::vector<float> pos;          // 3 por vertice, en espacio de mundo
     std::vector<float> nrm;          // 3 por vertice (calculadas si el archivo no las trae)
@@ -33,6 +61,7 @@ struct Mesh {
 
 struct Model {
     std::vector<Mesh> meshes;
+    std::vector<Skeleton> skeletons;
     std::vector<Image> images;
     float bmin[3] = {0, 0, 0}, bmax[3] = {0, 0, 0};
     size_t vertices = 0, triangles = 0;

@@ -10,14 +10,26 @@ const char* kVS = R"(#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
 layout(location=2) in vec2 aUv;
+layout(location=3) in vec4 aBoneIdx;
+layout(location=4) in vec4 aBoneW;
 uniform mat4 uMVP;
 uniform mat4 uMV;
+uniform mat4 uBones[48];
+uniform int uSkinned;
 out vec3 vN;
 out vec2 vUv;
 void main() {
-    vN = mat3(uMV) * aNrm;
+    vec4 p = vec4(aPos, 1.0);
+    vec3 n = aNrm;
+    if (uSkinned == 1) {
+        mat4 m = aBoneW.x * uBones[int(aBoneIdx.x)] + aBoneW.y * uBones[int(aBoneIdx.y)] +
+                 aBoneW.z * uBones[int(aBoneIdx.z)] + aBoneW.w * uBones[int(aBoneIdx.w)];
+        p = m * p;
+        n = mat3(m) * n;
+    }
+    vN = mat3(uMV) * n;
     vUv = aUv;
-    gl_Position = uMVP * vec4(aPos, 1.0);
+    gl_Position = uMVP * p;
 }
 )";
 
@@ -95,6 +107,7 @@ bool Renderer::init() {
     if (!ok) return false;
     uMVP_ = glGetUniformLocation(prog_, "uMVP"); uMV_ = glGetUniformLocation(prog_, "uMV");
     uTex_ = glGetUniformLocation(prog_, "uTex"); uHasTex_ = glGetUniformLocation(prog_, "uHasTex");
+    uBones_ = glGetUniformLocation(prog_, "uBones"); uSkinned_ = glGetUniformLocation(prog_, "uSkinned");
     glEnable(GL_DEPTH_TEST);
     return true;
 }
@@ -107,6 +120,7 @@ void Renderer::clearModel() {
         for (auto& s : m.subs) { glDeleteVertexArrays(1, &s.vao); glDeleteBuffers(1, &s.ebo); }
     }
     meshes_.clear();
+    skeletons_.clear(); palettes_.clear(); clipCount_ = 0; clip_ = 0; timeMs_ = 0;
     if (!textures_.empty()) glDeleteTextures((GLsizei)textures_.size(), textures_.data());
     textures_.clear();
 }
@@ -128,13 +142,19 @@ void Renderer::setModel(const Model& m) {
     }
     for (const Mesh& me : m.meshes) {
         const size_t nv = me.pos.size() / 3;
-        std::vector<float> vb(nv * 8);                     // pos3 nrm3 uv2 intercalado
+        const bool skinned = me.skeleton >= 0 && me.boneIdx.size() == nv * 4 && me.boneW.size() == nv * 4;
+        std::vector<float> vb(nv * 16, 0.f);               // pos3 nrm3 uv2 boneIdx4 boneW4 intercalado (64 bytes)
         for (size_t v = 0; v < nv; v++) {
-            std::memcpy(&vb[v * 8], &me.pos[v * 3], 12);
-            std::memcpy(&vb[v * 8 + 3], &me.nrm[v * 3], 12);
-            if (!me.uv.empty()) std::memcpy(&vb[v * 8 + 6], &me.uv[v * 2], 8);
+            std::memcpy(&vb[v * 16], &me.pos[v * 3], 12);
+            std::memcpy(&vb[v * 16 + 3], &me.nrm[v * 3], 12);
+            if (!me.uv.empty()) std::memcpy(&vb[v * 16 + 6], &me.uv[v * 2], 8);
+            if (skinned) {
+                std::memcpy(&vb[v * 16 + 8], &me.boneIdx[v * 4], 16);
+                std::memcpy(&vb[v * 16 + 12], &me.boneW[v * 4], 16);
+            }
         }
         GpuMesh gm;
+        gm.skel = skinned ? me.skeleton : -1;
         glGenBuffers(1, &gm.vbo);
         glBindBuffer(GL_ARRAY_BUFFER, gm.vbo);
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(vb.size() * sizeof(float)), vb.data(), GL_STATIC_DRAW);
@@ -143,9 +163,13 @@ void Renderer::setModel(const Model& m) {
             glGenVertexArrays(1, &s.vao); glGenBuffers(1, &s.ebo);
             glBindVertexArray(s.vao);
             glBindBuffer(GL_ARRAY_BUFFER, gm.vbo);
-            glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 32, (void*)0);
-            glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 32, (void*)12);
-            glEnableVertexAttribArray(2); glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 32, (void*)24);
+            glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 64, (void*)0);
+            glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 64, (void*)12);
+            glEnableVertexAttribArray(2); glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 64, (void*)24);
+            if (skinned) {
+                glEnableVertexAttribArray(3); glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 64, (void*)32);
+                glEnableVertexAttribArray(4); glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 64, (void*)48);
+            }
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.ebo);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(sm.indices.size() * 4), sm.indices.data(), GL_STATIC_DRAW);
             glBindVertexArray(0);
@@ -155,6 +179,10 @@ void Renderer::setModel(const Model& m) {
         }
         meshes_.push_back(std::move(gm));
     }
+    skeletons_ = m.skeletons;
+    palettes_.assign(skeletons_.size(), {});
+    for (auto& s : skeletons_) clipCount_ = std::max<int>(clipCount_, (int)s.clips.size());
+    clip_ = 0; timeMs_ = 0; playing_ = true; last_ = std::chrono::steady_clock::now();
     float d[3];
     for (int k = 0; k < 3; k++) { center_[k] = 0.5f * (m.bmin[k] + m.bmax[k]); d[k] = m.bmax[k] - m.bmin[k]; }
     radius_ = std::max(0.5f * std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]), 0.01f);
@@ -165,12 +193,33 @@ void Renderer::orbit(float dx, float dy) {
     yaw_ -= dx * 0.008f;
     pitch_ = std::max(-1.5f, std::min(1.5f, pitch_ + dy * 0.008f));
 }
+std::string Renderer::animInfo() const {
+    if (clipCount_ == 0) return "sin animaciones";
+    int dur = 0;
+    for (auto& s : skeletons_) if ((size_t)clip_ < s.clips.size()) dur = std::max(dur, s.clips[clip_].duration);
+    return "clip " + std::to_string(clip_ + 1) + "/" + std::to_string(clipCount_) + " - " + std::to_string(dur) + " ms - " +
+           (playing_ ? "reproduciendo" : "pausa");
+}
+std::string Renderer::nextClip(int delta) {
+    if (clipCount_ > 0) { clip_ = ((clip_ + delta) % clipCount_ + clipCount_) % clipCount_; timeMs_ = 0; }
+    return animInfo();
+}
+std::string Renderer::togglePlay() { playing_ = !playing_; last_ = std::chrono::steady_clock::now(); return animInfo(); }
+
 void Renderer::zoom(float f) { dist_ = std::max(radius_ * 0.2f, std::min(radius_ * 12.f, dist_ / f)); }
 
 void Renderer::draw() {
     glClearColor(0.07f, 0.08f, 0.10f, 1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     if (!prog_ || meshes_.empty()) return;
+    {   // avanzar la animacion y calcular las matrices de hueso
+        auto now = std::chrono::steady_clock::now();
+        double dt = std::chrono::duration<double, std::milli>(now - last_).count();
+        last_ = now;
+        if (playing_) timeMs_ += std::min(dt, 100.0);
+        for (size_t s = 0; s < skeletons_.size(); s++)
+            evalPalette(skeletons_[s], (size_t)clip_ < skeletons_[s].clips.size() ? clip_ : -1, timeMs_, palettes_[s]);
+    }
     const float cp = std::cos(pitch_), sp = std::sin(pitch_);
     const float eye[3] = {center_[0] + dist_ * cp * std::sin(yaw_), center_[1] + dist_ * sp, center_[2] + dist_ * cp * std::cos(yaw_)};
     const float up[3] = {0, 1, 0};
@@ -188,6 +237,8 @@ void Renderer::draw() {
             for (auto& s : m.subs) {
                 if (s.blend != (pass == 1)) continue;
                 glUniform1i(uHasTex_, s.tex ? 1 : 0);
+                glUniform1i(uSkinned_, m.skel >= 0 ? 1 : 0);
+                if (m.skel >= 0) glUniformMatrix4fv(uBones_, (GLsizei)(palettes_[m.skel].size() / 16), GL_FALSE, palettes_[m.skel].data());
                 if (s.tex) glBindTexture(GL_TEXTURE_2D, s.tex);
                 glBindVertexArray(s.vao);
                 glDrawElements(GL_TRIANGLES, s.count, GL_UNSIGNED_INT, nullptr);

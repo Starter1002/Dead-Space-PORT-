@@ -1,8 +1,10 @@
 #include "m3g.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <set>
 
 namespace ds {
 namespace {
@@ -39,6 +41,7 @@ Mat mul(const Mat& a, const Mat& b) {
 struct Obj {
     int type = -1; const uint8_t* d = nullptr; uint32_t len = 0;
     std::string ext;                                   // parametro de usuario 900: ruta de textura externa
+    std::string name;                                  // parametro de usuario 0: nombre (huesos, mallas)
     // Transformable
     bool hasTr = false, hasMat = false;
     double tr[3] = {0, 0, 0}, sc[3] = {1, 1, 1}, ang = 0, axis[3] = {0, 0, 1}, mat[16];
@@ -59,6 +62,12 @@ struct Obj {
     uint32_t vb = 0; std::vector<std::pair<uint32_t, uint32_t>> subs; bool subRefs = false;
     // SubMesh (tipo 100 propio de IM-M3G)
     uint32_t sa = 0, sb = 0;
+    // SkinnedMesh
+    std::vector<std::pair<uint32_t, uint32_t>> binds;  // (propiedad, nodo) = plantilla de canales de un clip
+    uint32_t idxArr = 0, wgtArr = 0; std::vector<uint32_t> bones;
+    // AnimationTrack (tipo 2) / KeyframeSequence (tipo 19)
+    uint32_t trSeq = 0, trProp = 0;
+    int kfInterp = 0, kfCC = 0; uint32_t kfDur = 0; std::vector<uint32_t> kfT; std::vector<float> kfV;
 };
 
 struct File {
@@ -76,6 +85,7 @@ void object3d(Rd& r, Obj& o) {
         uint32_t id = r.u32(), ln = r.u32();
         const uint8_t* s = r.raw(ln);
         if (s && id == 900) { o.ext.assign((const char*)s, ln); while (!o.ext.empty() && o.ext.back() == 0) o.ext.pop_back(); }
+        if (s && id == 0) { o.name.assign((const char*)s, ln); while (!o.name.empty() && o.name.back() == 0) o.name.pop_back(); }
     }
 }
 
@@ -103,7 +113,8 @@ void node(Rd& r) {
 bool parseSkinned(const File& f, Obj& o) {
     Rd r(o.d, o.len);
     object3d(r, o); transformable(r, o); r.raw(7); r.u8();
-    uint32_t N = r.u16(); r.raw((size_t)N * 8);
+    uint32_t N = r.u16();
+    for (uint32_t i = 0; i < N && r.ok; i++) { uint32_t pr = r.u32(), nd = r.u32(); o.binds.push_back({pr, nd}); }
     if (!r.ok) return false;
     for (size_t q = r.p; q + 4 <= o.len; q++) {
         Rd t(o.d, o.len); t.p = q;
@@ -115,7 +126,8 @@ bool parseSkinned(const File& f, Obj& o) {
         for (auto& s : subs) s = t.u32();
         uint32_t skel = t.u32(), ia = t.u32(), wa = t.u32(), nb = t.u32();
         if (!t.ok || nb > 4096 || !t.fits(nb, 4)) continue;
-        t.raw((size_t)nb * 4);
+        std::vector<uint32_t> bn(nb);
+        for (auto& b : bn) b = t.u32();
         if (!t.ok || t.p != o.len) continue;
         bool good = skel < f.types.size() && f.types[skel] == 9 && ia < f.types.size() && f.types[ia] == 20 &&
                     wa < f.types.size() && f.types[wa] == 20;
@@ -123,6 +135,7 @@ bool parseSkinned(const File& f, Obj& o) {
         if (!good) continue;
         o.vb = vb; o.subRefs = true;
         for (uint32_t s : subs) o.subs.push_back({s, 0});
+        o.idxArr = ia; o.wgtArr = wa; o.bones = bn;
         return true;
     }
     return false;
@@ -131,6 +144,27 @@ bool parseSkinned(const File& f, Obj& o) {
 bool parseObj(const File& f, Obj& o) {
     Rd r(o.d, o.len);
     switch (o.type) {
+    case 2: {                                              // AnimationTrack
+        object3d(r, o); o.trSeq = r.u32(); r.u32(); o.trProp = r.u32();
+        break; }
+    case 19: {                                             // KeyframeSequence
+        object3d(r, o);
+        o.kfInterp = r.u8(); r.u8(); int enc = r.u8();
+        o.kfDur = r.u32(); r.u32(); r.u32();
+        uint32_t cc = r.u32(), nk = r.u32();
+        if (cc == 0 || cc > 16 || enc > 2) return false;
+        size_t per = 4 + (enc == 0 ? cc * 4 : enc == 1 ? cc : cc * 2);
+        std::vector<float> bias(cc, 0.f), scale(cc, 1.f);
+        if (enc != 0) { for (auto& b : bias) b = r.f32(); for (auto& s : scale) s = r.f32(); }
+        if (!r.fits(nk, per)) return false;
+        o.kfCC = (int)cc; o.kfT.resize(nk); o.kfV.resize((size_t)nk * cc);
+        for (uint32_t k = 0; k < nk; k++) {
+            o.kfT[k] = r.u32();
+            for (uint32_t j = 0; j < cc; j++)
+                o.kfV[(size_t)k * cc + j] = enc == 0 ? r.f32() : enc == 1 ? r.u8() / 255.0f * scale[j] + bias[j]
+                                                                         : r.u16() / 65535.0f * scale[j] + bias[j];
+        }
+        break; }
     case 3: {                                              // Appearance
         object3d(r, o); r.u8(); r.u32(); r.u32(); r.u32(); r.u32();
         uint32_t n = r.u32(); if (!r.fits(n, 4)) return false;
@@ -316,6 +350,126 @@ struct Loader {
 
 }  // namespace
 
+namespace {
+
+Mat fromTRS(const double tr[3], const double q[4], const double sc[3]) {
+    double x = q[0], y = q[1], z = q[2], w = q[3];
+    double n = std::sqrt(x * x + y * y + z * z + w * w); if (n < 1e-12) { x = y = z = 0; w = 1; n = 1; }
+    x /= n; y /= n; z /= n; w /= n;
+    double R[9] = {1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+                   2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+                   2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)};
+    Mat M = identity();
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 3; c++) M.m[r * 4 + c] = R[r * 3 + c] * sc[c];
+        M.m[r * 4 + 3] = tr[r];
+    }
+    return M;
+}
+
+// Inversa 4x4 general (Gauss-Jordan). Si es singular devuelve la identidad.
+Mat inverse4(const Mat& a) {
+    double m[4][8];
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) { m[i][j] = a.m[i * 4 + j]; m[i][4 + j] = (i == j) ? 1.0 : 0.0; }
+    for (int c = 0; c < 4; c++) {
+        int p = c;
+        for (int r = c + 1; r < 4; r++) if (std::fabs(m[r][c]) > std::fabs(m[p][c])) p = r;
+        if (std::fabs(m[p][c]) < 1e-12) return identity();
+        if (p != c) for (int j = 0; j < 8; j++) std::swap(m[p][j], m[c][j]);
+        double d = m[c][c];
+        for (int j = 0; j < 8; j++) m[c][j] /= d;
+        for (int r = 0; r < 4; r++) if (r != c) { double f = m[r][c]; for (int j = 0; j < 8; j++) m[r][j] -= f * m[c][j]; }
+    }
+    Mat o;
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) o.m[i * 4 + j] = m[i][4 + j];
+    return o;
+}
+
+// Muestrea una pista en el instante t (ms). Interpolaciones M3G: 176 lineal, 177 slerp, 180 escalon.
+void sampleTrack(const Skeleton::Track& tr, double t, double out[4]) {
+    const int cc = tr.comps; const size_t nk = tr.t.size();
+    if (nk == 0 || cc <= 0 || cc > 4) return;
+    auto copy = [&](size_t k) { for (int j = 0; j < cc; j++) out[j] = tr.v[k * cc + j]; };
+    if (nk == 1 || t <= tr.t[0]) { copy(0); return; }
+    if (t >= tr.t[nk - 1]) { copy(nk - 1); return; }
+    size_t lo = 0, hi = nk - 1;
+    while (hi - lo > 1) { size_t mid = (lo + hi) / 2; if (tr.t[mid] <= t) lo = mid; else hi = mid; }
+    if (tr.interp == 180) { copy(lo); return; }
+    double u = (t - tr.t[lo]) / (double)(tr.t[hi] - tr.t[lo]);
+    const float* a = &tr.v[lo * cc]; const float* b = &tr.v[hi * cc];
+    if (cc == 4) {                                         // cuaternion: camino corto
+        double dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+        double s = dot < 0 ? -1.0 : 1.0; dot *= s;
+        double wa = 1 - u, wb = u;
+        if (tr.interp == 177 && dot < 0.9995) {
+            double th = std::acos(std::min(1.0, dot)), sn = std::sin(th);
+            wa = std::sin((1 - u) * th) / sn; wb = std::sin(u * th) / sn;
+        }
+        double q[4], n = 0;
+        for (int j = 0; j < 4; j++) { q[j] = wa * a[j] + wb * s * b[j]; n += q[j] * q[j]; }
+        n = std::sqrt(n); if (n < 1e-12) n = 1;
+        for (int j = 0; j < 4; j++) out[j] = q[j] / n;
+    } else {
+        for (int j = 0; j < cc; j++) out[j] = a[j] + (b[j] - a[j]) * u;
+    }
+}
+
+}  // namespace
+
+void evalPalette(const Skeleton& sk, int clip, double timeMs, std::vector<float>& out) {
+    const size_t n = sk.nodes.size();
+    std::vector<std::array<double, 3>> tr(n), sc(n);
+    std::vector<std::array<double, 4>> q(n);
+    for (size_t i = 0; i < n; i++) {
+        const auto& nd = sk.nodes[i];
+        for (int k = 0; k < 3; k++) { tr[i][k] = nd.tr[k]; sc[i][k] = nd.sc[k]; }
+        for (int k = 0; k < 4; k++) q[i][k] = nd.q[k];
+    }
+    if (clip >= 0 && (size_t)clip < sk.clips.size()) {
+        const auto& cl = sk.clips[clip];
+        double dur = cl.duration > 0 ? cl.duration : 1.0;
+        double t = std::fmod(timeMs, dur); if (t < 0) t += dur;
+        for (size_t k = 0; k < sk.channels.size() && k < cl.tracks.size(); k++) {
+            const auto& ch = sk.channels[k]; if (ch.node < 0) continue;
+            double v[4] = {0, 0, 0, 1};
+            if (ch.prop == 275) { v[0] = tr[ch.node][0]; v[1] = tr[ch.node][1]; v[2] = tr[ch.node][2]; sampleTrack(cl.tracks[k], t, v); for (int j = 0; j < 3; j++) tr[ch.node][j] = v[j]; }
+            else if (ch.prop == 268) { sampleTrack(cl.tracks[k], t, v); for (int j = 0; j < 4; j++) q[ch.node][j] = v[j]; }
+            else if (ch.prop == 270) { v[0] = sc[ch.node][0]; v[1] = sc[ch.node][1]; v[2] = sc[ch.node][2]; sampleTrack(cl.tracks[k], t, v);
+                if (cl.tracks[k].comps == 1) { for (int j = 0; j < 3; j++) sc[ch.node][j] = v[0]; } else for (int j = 0; j < 3; j++) sc[ch.node][j] = v[j]; }
+        }
+    }
+    std::vector<Mat> W(n);
+    for (size_t i = 0; i < n; i++) {
+        Mat M = fromTRS(tr[i].data(), q[i].data(), sc[i].data());
+        int p = sk.nodes[i].parent;
+        W[i] = (p >= 0 && (size_t)p < i) ? mul(W[p], M) : M;
+    }
+    out.assign(sk.palette.size() * 16, 0.f);
+    for (size_t b = 0; b < sk.palette.size(); b++) {
+        Mat inv; for (int k = 0; k < 16; k++) inv.m[k] = sk.invBind[b * 16 + k];
+        Mat P = mul(W[sk.palette[b]], inv);
+        for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) out[b * 16 + c * 4 + r] = (float)P.m[r * 4 + c];   // columna-mayor
+    }
+}
+
+void skinPositions(const Mesh& m, const std::vector<float>& pal, std::vector<float>& out) {
+    const size_t nv = m.pos.size() / 3;
+    out.assign(nv * 3, 0.f);
+    for (size_t v = 0; v < nv; v++) {
+        const float x = m.pos[v * 3], y = m.pos[v * 3 + 1], z = m.pos[v * 3 + 2];
+        float acc[3] = {0, 0, 0};
+        for (int k = 0; k < 4; k++) {
+            float w = m.boneW[v * 4 + k]; if (w == 0.f) continue;
+            const float* M = &pal[(size_t)m.boneIdx[v * 4 + k] * 16];
+            acc[0] += w * (M[0] * x + M[4] * y + M[8] * z + M[12]);
+            acc[1] += w * (M[1] * x + M[5] * y + M[9] * z + M[13]);
+            acc[2] += w * (M[2] * x + M[6] * y + M[10] * z + M[14]);
+        }
+        for (int k = 0; k < 3; k++) out[v * 3 + k] = acc[k];
+    }
+}
+
 // ------------------------------------------------------------------ carga del modelo
 bool loadModel(const FileReader& rd, const std::string& path, Model& out, std::string& err) {
     out = Model();
@@ -351,6 +505,16 @@ bool loadModel(const FileReader& rd, const std::string& path, Model& out, std::s
         if (pit != parent.end() && pit->second != i) M = mul(world(pit->second), M);
         wcache[i] = M; return M;
     };
+
+    // secuencias de fotogramas no enlazadas por ninguna AnimationTrack: bloques de clips de los esqueletos
+    std::set<uint32_t> usedSeq;
+    for (size_t i = 1; i < f.objs.size(); i++) if (f.objs[i].type == 2) usedSeq.insert(f.objs[i].trSeq);
+    std::vector<std::pair<uint32_t, uint32_t>> freeRuns;
+    for (size_t i = 1; i < f.objs.size(); i++) {
+        if (f.objs[i].type != 19 || usedSeq.count((uint32_t)i)) continue;
+        if (!freeRuns.empty() && freeRuns.back().second + 1 == i) freeRuns.back().second = (uint32_t)i;
+        else freeRuns.push_back({(uint32_t)i, (uint32_t)i});
+    }
 
     Loader L(rd, out);
     std::map<uint32_t, int> imgCache;
@@ -443,11 +607,84 @@ bool loadModel(const FileReader& rd, const std::string& path, Model& out, std::s
                 if (first) { out.bmin[k] = out.bmax[k] = x; } else { out.bmin[k] = std::min(out.bmin[k], x); out.bmax[k] = std::max(out.bmax[k], x); }
                 if (k == 2) first = false;
             }
+        // ---- esqueleto y animaciones (SkinnedMesh con <= 48 huesos: skinning en GPU)
+        if (mo.type == 16 && !mo.bones.empty() && mo.bones.size() <= 48 && isT(mo.idxArr, 20) && isT(mo.wgtArr, 20)) {
+            const Obj& ia = f.objs[mo.idxArr]; const Obj& wa = f.objs[mo.wgtArr];
+            bool okArr = ia.cc >= 4 && wa.cc >= 4 && ia.arr.size() / ia.cc == nv && wa.arr.size() / wa.cc == nv;
+            bool okBones = true;
+            for (uint32_t b : mo.bones) okBones = okBones && isT(b, 9);
+            if (okArr && okBones) {
+                Skeleton sk; std::map<uint32_t, int> nodeIdx;
+                std::function<int(uint32_t)> addNode = [&](uint32_t id) -> int {
+                    auto it = nodeIdx.find(id); if (it != nodeIdx.end()) return it->second;
+                    int par = -1; auto pit = parent.find(id);
+                    if (pit != parent.end() && pit->second != id) par = addNode(pit->second);
+                    Skeleton::Node nd; nd.parent = par; const Obj& g = f.objs[id]; nd.name = g.name;
+                    if (g.hasTr) {
+                        for (int k = 0; k < 3; k++) { nd.tr[k] = (float)g.tr[k]; nd.sc[k] = (float)g.sc[k]; }
+                        double ax[3] = {g.axis[0], g.axis[1], g.axis[2]}, n = std::sqrt(ax[0]*ax[0] + ax[1]*ax[1] + ax[2]*ax[2]);
+                        if (n > 1e-9 && std::fabs(g.ang) > 1e-9) {
+                            double h = g.ang * M_PI / 360.0, s = std::sin(h) / n;
+                            nd.q[0] = (float)(ax[0] * s); nd.q[1] = (float)(ax[1] * s); nd.q[2] = (float)(ax[2] * s); nd.q[3] = (float)std::cos(h);
+                        }
+                    }
+                    sk.nodes.push_back(nd); nodeIdx[id] = (int)sk.nodes.size() - 1; return nodeIdx[id];
+                };
+                for (uint32_t b : mo.bones) sk.palette.push_back(addNode(b));
+                for (auto& bd : mo.binds) {
+                    Skeleton::Channel ch; ch.prop = (int)bd.first;
+                    ch.node = isT(bd.second, 9) ? addNode(bd.second) : -1;
+                    sk.channels.push_back(ch);
+                }
+                // inversa del mundo en reposo, por hueso
+                std::vector<Mat> W0(sk.nodes.size());
+                for (size_t i = 0; i < sk.nodes.size(); i++) {
+                    const auto& nd = sk.nodes[i];
+                    double t3[3] = {nd.tr[0], nd.tr[1], nd.tr[2]}, q4[4] = {nd.q[0], nd.q[1], nd.q[2], nd.q[3]}, s3[3] = {nd.sc[0], nd.sc[1], nd.sc[2]};
+                    Mat M = fromTRS(t3, q4, s3);
+                    W0[i] = nd.parent >= 0 ? mul(W0[nd.parent], M) : M;
+                }
+                sk.invBind.resize(sk.palette.size() * 16);
+                for (size_t b = 0; b < sk.palette.size(); b++) { Mat iv = inverse4(W0[sk.palette[b]]); for (int k = 0; k < 16; k++) sk.invBind[b * 16 + k] = (float)iv.m[k]; }
+                // clips: bloques de N secuencias consecutivas con la forma de la plantilla de canales
+                const size_t N = sk.channels.size();
+                if (N > 0)
+                    for (auto& run : freeRuns) {
+                        size_t L = run.second - run.first + 1;
+                        for (size_t blk = 0; blk < L / N; blk++) {
+                            bool good = true;
+                            for (size_t k = 0; k < N && good; k++) {
+                                const Obj& sq = f.objs[run.first + blk * N + k];
+                                int want = sk.channels[k].prop == 268 ? 4 : 3;
+                                good = sq.type == 19 && (sq.kfCC == want || (sk.channels[k].prop == 270 && sq.kfCC == 1));
+                            }
+                            if (!good) break;
+                            Skeleton::Clip cl;
+                            for (size_t k = 0; k < N; k++) {
+                                const Obj& sq = f.objs[run.first + blk * N + k];
+                                Skeleton::Track tr; tr.interp = sq.kfInterp; tr.comps = sq.kfCC; tr.t = sq.kfT; tr.v = sq.kfV;
+                                cl.duration = std::max<int>(cl.duration, (int)std::max<uint32_t>(sq.kfDur, sq.kfT.empty() ? 0 : sq.kfT.back()));
+                                cl.tracks.push_back(std::move(tr));
+                            }
+                            sk.clips.push_back(std::move(cl));
+                        }
+                    }
+                me.boneIdx.resize(nv * 4); me.boneW.resize(nv * 4);
+                for (size_t v = 0; v < nv; v++)
+                    for (int k = 0; k < 4; k++) {
+                        me.boneIdx[v * 4 + k] = std::max(0.f, std::min((float)(mo.bones.size() - 1), ia.arr[v * ia.cc + k]));
+                        me.boneW[v * 4 + k] = wa.arr[v * wa.cc + k];
+                    }
+                out.skeletons.push_back(std::move(sk));
+                me.skeleton = (int)out.skeletons.size() - 1;
+            }
+        }
         out.vertices += nv;
         for (auto& sm : me.subs) out.triangles += sm.indices.size() / 3;
         out.meshes.push_back(std::move(me));
     }
-    out.log = path + ": " + std::to_string(out.meshes.size()) + " mallas, " + std::to_string(out.vertices) + " vertices, " +
+    size_t nclips = 0; for (auto& s : out.skeletons) nclips = std::max(nclips, s.clips.size());
+    out.log = path + (out.skeletons.empty() ? "" : " [" + std::to_string(out.skeletons.size()) + " esqueleto(s), " + std::to_string(nclips) + " clips]") + ": " + std::to_string(out.meshes.size()) + " mallas, " + std::to_string(out.vertices) + " vertices, " +
               std::to_string(out.triangles) + " triangulos, " + std::to_string(out.images.size()) + " texturas";
     if (!L.warn.empty()) out.log += "\n" + L.warn;
     if (out.meshes.empty()) { err = "el archivo no contiene mallas"; return false; }

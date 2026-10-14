@@ -13,6 +13,10 @@ public final class NativeLib {
     public static native void nativeDraw();
     public static native void nativeOrbit(float dx, float dy);
     public static native void nativeZoom(float factor);
+    /** Animacion (hilo GL): estado del clip actual, siguiente/anterior clip y pausa. */
+    public static native String nativeAnimInfo();
+    public static native String nativeNextClip(int delta);
+    public static native String nativeTogglePlay();
     /** Debe llamarse desde el hilo GL. Devuelve el resumen del modelo o "ERROR: ...". */
     public static native String nativeLoad(String path);
 }

@@ -16,6 +16,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Se usa el Android SDK que ya trae el runner de GitHub (sin descargar herramientas aparte)
       - name: Aceptar licencias e instalar SDK, NDK y CMake
         run: |
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"

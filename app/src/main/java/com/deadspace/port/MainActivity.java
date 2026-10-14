@@ -31,13 +31,14 @@ import javax.microedition.khronos.opengles.GL10;
 /**
  * Visor de modelos .m3g originales de Dead Space (iOS) en Android arm64.
  * Los archivos del juego NO van dentro del APK: se leen de /sdcard/DeadSpace/published/.
- * Un dedo: orbitar. Pellizco: zoom. Botones: modelo anterior / siguiente.
+ * Un dedo: orbitar. Pellizco: zoom. Fila inferior: modelo anterior/siguiente; encima, clip de animacion
+ * anterior/siguiente y pausa.
  */
 public class MainActivity extends Activity {
     private static final String ROOT_REL = "DeadSpace/published";
 
     private GLSurfaceView glView;
-    private TextView infoView, nameView;
+    private TextView infoView, nameView, animView;
     private Button permBtn;
     private final List<String> models = new ArrayList<>();
     private int current = 0;
@@ -104,9 +105,9 @@ public class MainActivity extends Activity {
         permBtn.setOnClickListener(v -> requestAccess());
         rootView.addView(permBtn, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
+        // fila de modelos
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(0x88000000);
         final Button prev = new Button(this); prev.setText("<");
         final Button next = new Button(this); next.setText(">");
         nameView = new TextView(this);
@@ -114,7 +115,24 @@ public class MainActivity extends Activity {
         bar.addView(prev, new LinearLayout.LayoutParams(-2, -2));
         bar.addView(nameView, new LinearLayout.LayoutParams(0, -2, 1f));
         bar.addView(next, new LinearLayout.LayoutParams(-2, -2));
-        rootView.addView(bar, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+
+        // fila de animacion
+        LinearLayout animBar = new LinearLayout(this);
+        animBar.setOrientation(LinearLayout.HORIZONTAL); animBar.setGravity(Gravity.CENTER_VERTICAL);
+        final Button cPrev = new Button(this); cPrev.setText("clip -");
+        final Button cNext = new Button(this); cNext.setText("clip +");
+        final Button play = new Button(this); play.setText("play/pausa");
+        animView = new TextView(this);
+        animView.setTextColor(Color.WHITE); animView.setGravity(Gravity.CENTER); animView.setTextSize(11);
+        animBar.addView(cPrev, new LinearLayout.LayoutParams(-2, -2));
+        animBar.addView(animView, new LinearLayout.LayoutParams(0, -2, 1f));
+        animBar.addView(play, new LinearLayout.LayoutParams(-2, -2));
+        animBar.addView(cNext, new LinearLayout.LayoutParams(-2, -2));
+
+        LinearLayout bottom = new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.VERTICAL); bottom.setBackgroundColor(0x88000000);
+        bottom.addView(animBar); bottom.addView(bar);
+        rootView.addView(bottom, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         setContentView(rootView);
 
         View.OnClickListener nav = v -> {
@@ -123,6 +141,10 @@ public class MainActivity extends Activity {
             glView.queueEvent(this::loadCurrentOnGlThread);
         };
         prev.setOnClickListener(nav); next.setOnClickListener(nav);
+
+        cPrev.setOnClickListener(v -> glView.queueEvent(() -> setAnim(NativeLib.nativeNextClip(-1))));
+        cNext.setOnClickListener(v -> glView.queueEvent(() -> setAnim(NativeLib.nativeNextClip(1))));
+        play.setOnClickListener(v -> glView.queueEvent(() -> setAnim(NativeLib.nativeTogglePlay())));
     }
 
     // ------------------------------------------------------------------ permisos y lista de modelos
@@ -178,8 +200,11 @@ public class MainActivity extends Activity {
         final String name = models.get(current);
         final String info = NativeLib.nativeLoad("models/" + name);
         final int pos = current + 1, total = models.size();
-        runOnUiThread(() -> { nameView.setText(pos + "/" + total + "  " + name); infoView.setText(info); });
+        final String anim = NativeLib.nativeAnimInfo();
+        runOnUiThread(() -> { nameView.setText(pos + "/" + total + "  " + name); infoView.setText(info); animView.setText(anim); });
     }
+
+    private void setAnim(final String s) { runOnUiThread(() -> animView.setText(s)); }
 
     private void showInfo(final String s) { runOnUiThread(() -> infoView.setText(s)); }
 
